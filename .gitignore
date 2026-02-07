@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+debug_capture.png
+debug_preprocessed.png
+.env
