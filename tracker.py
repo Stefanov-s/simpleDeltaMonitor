@@ -1,6 +1,6 @@
 """
 Background thread: capture region at interval, OCR number, compare with previous.
-Puts log entries and optional alert on a queue for the UI thread.
+Triggers only when value *increases* by >= win. Optional click, ntfy, then alert.
 """
 from __future__ import annotations
 
@@ -8,23 +8,41 @@ import time
 from queue import Queue
 from threading import Event, Thread
 from typing import Any
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 from reader import capture_region, image_to_number
+
+
+def _send_ntfy(topic: str, message: str) -> bool:
+    """POST to ntfy.sh topic. Returns True if sent successfully."""
+    topic = (topic or "").strip()
+    if not topic:
+        return False
+    url = f"https://ntfy.sh/{topic}"
+    try:
+        req = Request(url, data=message.encode("utf-8"), method="POST")
+        req.add_header("Content-Type", "text/plain; charset=utf-8")
+        urlopen(req, timeout=10)
+        return True
+    except (URLError, OSError):
+        return False
 
 
 def run_tracker(
     region: tuple[int, int, int, int],
     interval: float,
-    delta: float,
+    win: float,
     stop_event: Event,
     out_queue: "Queue[Any]",
-    click_on_delta: tuple[int, int] | None = None,
+    click_on_win: tuple[int, int] | None = None,
+    ntfy_topic: str | None = None,
+    ntfy_message: str = "",
 ) -> None:
     """
     Run in a background thread. Every `interval` seconds, capture region,
-    OCR number, push (timestamp_str, value) to out_queue. If value changed
-    by >= delta: optionally click at click_on_delta (and wait for success),
-    then push ("alert", ts, prev, curr, clicked_at) and return.
+    OCR number, push (timestamp_str, value) to out_queue. Trigger only when
+    value *increases* by >= win. Then: optional click, optional ntfy POST, then alert.
     """
     left, top, width, height = region
     prev: float | None = None
@@ -37,23 +55,26 @@ def run_tracker(
 
         if value is not None:
             out_queue.put(("reading", ts, value))
-            if prev is not None and abs(value - prev) >= delta:
+            # Trigger only on increase by >= win (not on decrease)
+            if prev is not None and (value - prev) >= win:
                 clicked_at: tuple[int, int] | None = None
-                if click_on_delta:
+                if click_on_win:
                     try:
                         import pyautogui
-                        cx, cy = click_on_delta
+                        cx, cy = click_on_win
                         pyautogui.click(cx, cy)
                         clicked_at = (cx, cy)
                     except Exception:
                         clicked_at = None
+                if ntfy_topic and ntfy_topic.strip():
+                    body = (ntfy_message or "Win reached").strip() or "Win reached"
+                    _send_ntfy(ntfy_topic.strip(), body)
                 out_queue.put(("alert", ts, prev, value, clicked_at))
                 return
             prev = value
         else:
             out_queue.put(("reading", ts, None))  # log failed read
 
-        # Sleep for the rest of the interval
         elapsed = time.monotonic() - t0
         sleep_for = max(0.01, interval - elapsed)
         if stop_event.wait(timeout=sleep_for):
@@ -63,15 +84,17 @@ def run_tracker(
 def start_tracker(
     region: tuple[int, int, int, int],
     interval: float,
-    delta: float,
+    win: float,
     stop_event: Event,
     out_queue: "Queue[Any]",
-    click_on_delta: tuple[int, int] | None = None,
+    click_on_win: tuple[int, int] | None = None,
+    ntfy_topic: str | None = None,
+    ntfy_message: str = "",
 ) -> Thread:
     """Start the tracker in a daemon thread; returns the thread."""
     t = Thread(
         target=run_tracker,
-        args=(region, interval, delta, stop_event, out_queue, click_on_delta),
+        args=(region, interval, win, stop_event, out_queue, click_on_win, ntfy_topic, ntfy_message),
         daemon=True,
     )
     t.start()

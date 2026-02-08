@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-DeltaMonitorBot - Ubuntu X11. Select a screen region, read a number at an interval,
-alert when the value changes by at least delta between two checks.
+DeltaMonitorBot - Ubuntu X11. Select a screen region, read a number at an interval.
+Win: trigger when the value *increases* by at least the win threshold (not on decrease).
 """
 from __future__ import annotations
 
@@ -15,6 +15,10 @@ from reader import test_region
 from threading import Event
 import os
 import sys
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Windows etc.; no single-instance lock
 
 # Max lines to show in log
 LOG_MAX = 100
@@ -78,8 +82,40 @@ Categories=Utility;
         pass
 
 
+def _take_single_instance_lock() -> bool:
+    """Try to take an exclusive lock so only one app instance runs. Returns True if we got it."""
+    if fcntl is None:
+        return True
+    import tempfile
+    lock_path = os.path.join(tempfile.gettempdir(), "deltamonitorbot.lock")
+    try:
+        f = open(lock_path, "w")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        f.write(str(os.getpid()))
+        f.flush()
+        App._lock_file = f  # type: ignore[attr-defined]
+        return True
+    except (OSError, BlockingIOError):
+        try:
+            f.close()
+        except Exception:
+            pass
+        return False
+
+
 class App:
+    _lock_file = None
+
     def __init__(self):
+        if not _take_single_instance_lock():
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo(
+                "Already running",
+                "DeltaMonitorBot is already running.\nClose that window first, or run: killall python3",
+            )
+            root.destroy()
+            raise SystemExit(0)
         self.root = tk.Tk()
         self.root.title("DeltaMonitorBot (X11)")
         self.root.minsize(440, 420)
@@ -134,10 +170,10 @@ class App:
 
         row2 = ttk.Frame(settings)
         row2.pack(fill=tk.X, pady=3)
-        ttk.Label(row2, text="Delta (alert if change ≥):", width=20, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 6))
-        self.delta_var = tk.StringVar(value="2")
-        self.delta_entry = ttk.Entry(row2, textvariable=self.delta_var, width=8)
-        self.delta_entry.pack(side=tk.LEFT)
+        ttk.Label(row2, text="Win (trigger if value increases by ≥):", width=28, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 6))
+        self.win_var = tk.StringVar(value="2")
+        self.win_entry = ttk.Entry(row2, textvariable=self.win_var, width=8)
+        self.win_entry.pack(side=tk.LEFT)
 
         row3 = ttk.Frame(settings)
         row3.pack(fill=tk.X, pady=6)
@@ -152,8 +188,8 @@ class App:
         self.stop_btn = ttk.Button(row3, text="Stop", command=self._on_stop, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=2)
 
-        # --- On delta: action ---
-        actions = ttk.LabelFrame(main, text=" On delta reached ", padding=8)
+        # --- On win: action ---
+        actions = ttk.LabelFrame(main, text=" On win reached ", padding=8)
         actions.pack(fill=tk.X, pady=(0, 10))
 
         self.click_action_var = tk.BooleanVar(value=False)
@@ -168,6 +204,16 @@ class App:
         self.click_pos_btn.pack(side=tk.LEFT, padx=2)
         self.click_pos_label = ttk.Label(row_act, text="Click: not set", width=18, anchor=tk.W)
         self.click_pos_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        # ntfy (custom topic + message)
+        row_ntfy = ttk.Frame(actions)
+        row_ntfy.pack(fill=tk.X, pady=4)
+        ttk.Label(row_ntfy, text="ntfy topic:", width=12, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 4))
+        self.ntfy_topic_var = tk.StringVar(value="")
+        ttk.Entry(row_ntfy, textvariable=self.ntfy_topic_var, width=18).pack(side=tk.LEFT, padx=2)
+        ttk.Label(row_ntfy, text="Custom message:", width=14, anchor=tk.W).pack(side=tk.LEFT, padx=(10, 4))
+        self.ntfy_message_var = tk.StringVar(value="Win reached")
+        ttk.Entry(row_ntfy, textvariable=self.ntfy_message_var, width=24).pack(side=tk.LEFT, padx=2)
 
         # --- Status ---
         self.status_var = tk.StringVar(value="Idle")
@@ -226,27 +272,35 @@ class App:
             return
         try:
             interval = float(self.interval_var.get().strip())
-            delta = float(self.delta_var.get().strip())
+            win = float(self.win_var.get().strip())
         except ValueError:
-            messagebox.showerror("Invalid input", "Interval and Delta must be numbers.")
+            messagebox.showerror("Invalid input", "Interval and Win must be numbers.")
             return
         if interval <= 0 or interval > 60:
             messagebox.showerror("Invalid input", "Interval must be between 0.01 and 60.")
             return
-        if delta < 0:
-            messagebox.showerror("Invalid input", "Delta must be >= 0.")
+        if win < 0:
+            messagebox.showerror("Invalid input", "Win must be >= 0.")
             return
 
-        click_on_delta: tuple[int, int] | None = None
+        click_on_win: tuple[int, int] | None = None
         if self.click_action_var.get() and self.click_on_delta is not None:
-            click_on_delta = self.click_on_delta
+            click_on_win = self.click_on_delta
         elif self.click_action_var.get():
-            messagebox.showwarning("Click action", "Click on delta is enabled but no position set. Select click position or disable the option.")
+            messagebox.showwarning("Click action", "Click on win is enabled but no position set. Select click position or disable the option.")
             return
+
+        ntfy_topic = (self.ntfy_topic_var.get() or "").strip() or None
+        ntfy_message = (self.ntfy_message_var.get() or "").strip() or "Win reached"
 
         self.stop_event.clear()
         self.queue = Queue()
-        start_tracker(self.region, interval, delta, self.stop_event, self.queue, click_on_delta)
+        start_tracker(
+            self.region, interval, win, self.stop_event, self.queue,
+            click_on_win=click_on_win,
+            ntfy_topic=ntfy_topic,
+            ntfy_message=ntfy_message,
+        )
         self.status_var.set("Monitoring...")
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
@@ -280,10 +334,21 @@ class App:
         """Handle window close (X button): stop tracking and quit."""
         self.stop_event.set()
         if self._poll_id:
-            self.root.after_cancel(self._poll_id)
+            try:
+                self.root.after_cancel(self._poll_id)
+            except Exception:
+                pass
             self._poll_id = None
-        self.root.quit()
-        self.root.destroy()
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        try:
+            self.root.quit()
+        except Exception:
+            pass
+        # Force process exit if Tk left something running (e.g. old instances)
+        os._exit(0)
 
     def _on_stop(self):
         self.stop_event.set()
@@ -314,19 +379,18 @@ class App:
                     self.log_listbox.see(tk.END)
                 elif item[0] == "alert":
                     _, ts, prev, curr, clicked_at = item
-                    self._set_stopped("Stopped (delta alert)")
-                    change = curr - prev
-                    change_str = f"+{change}" if change >= 0 else str(change)
+                    self._set_stopped("Stopped (win)")
+                    gain = curr - prev
                     lines = [
                         f"Time: {ts}",
-                        f"Delta reached: previous {prev} → current {curr} (change: {change_str})",
+                        f"Win reached: {prev} → {curr} (gain: +{gain})",
                     ]
                     if clicked_at is not None:
                         lines.append(f"Clicked at ({clicked_at[0]}, {clicked_at[1]})")
                     else:
                         if getattr(self, "click_action_var", None) and self.click_action_var.get():
                             lines.append("Click was requested but did not execute.")
-                    messagebox.showwarning("Delta alert", "\n".join(lines))
+                    messagebox.showwarning("Win reached", "\n".join(lines))
                     return
         except Empty:
             pass
