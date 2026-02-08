@@ -62,7 +62,18 @@ def _install_desktop_entry(app_dir: str, icon_path: str | None) -> None:
         return
     exe = sys.executable
     main_py = os.path.join(app_dir, "main.py")
-    icon_line = f"Icon={icon_path}\n" if icon_path and os.path.isfile(icon_path) else ""
+    # Install icon into ~/.local/share/icons so the menu finds it on any machine
+    icon_name = "DeltaMonitorBot"
+    icons_dir = os.path.expanduser("~/.local/share/icons")
+    icon_line = f"Icon={icon_name}\n"
+    if icon_path and os.path.isfile(icon_path):
+        try:
+            os.makedirs(icons_dir, exist_ok=True)
+            dest = os.path.join(icons_dir, f"{icon_name}.png")
+            import shutil
+            shutil.copy2(icon_path, dest)
+        except Exception:
+            icon_line = f"Icon={icon_path}\n"  # fallback to full path
     content = f"""[Desktop Entry]
 Type=Application
 Name=DeltaMonitorBot
