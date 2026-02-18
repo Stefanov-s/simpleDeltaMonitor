@@ -10,7 +10,7 @@ from tkinter import messagebox, ttk
 from queue import Queue, Empty
 
 from region_selector import select_region, select_point
-from tracker import start_tracker
+from tracker import start_tracker, start_autoclicker
 from reader import test_region
 from threading import Event
 import os
@@ -29,6 +29,7 @@ BTN_TEST = "✓"
 BTN_START = "▶"
 BTN_STOP = "■"
 BTN_SELECT_CLICK = "•"
+BTN_AUTOCLICK = "↻"  # repeat/autoclick (avoid ⏱ - can cause X11 RenderAddGlyphs error on some setups)
 
 # Icon colors (readable, distinct)
 COLOR_ICON_SELECT = "#1565c0"   # blue
@@ -36,6 +37,7 @@ COLOR_ICON_TEST = "#7b1fa2"     # purple
 COLOR_ICON_START = "#2e7d32"    # green
 COLOR_ICON_STOP = "#c62828"     # red
 COLOR_ICON_CLICK = "#e65100"    # orange
+COLOR_ICON_AUTOCLICK = "#00838f"  # teal
 
 # UI colors (colorful but good contrast)
 COLOR_BG = "#e8ecf2"
@@ -188,6 +190,8 @@ class App:
 
         self.region: tuple[int, int, int, int] | None = None
         self.click_on_delta: tuple[int, int] | None = None
+        self.autoclicker_coords: tuple[int, int] | None = None
+        self._autoclicker_stop_event: Event | None = None
         self.stop_event = Event()
         self.queue: Queue = Queue()
         self._poll_id: str | None = None
@@ -252,6 +256,24 @@ class App:
         self.stop_btn = _icon_btn(row3, BTN_STOP, COLOR_ICON_STOP, self._on_stop, "disabled")
         self.stop_btn.pack(side=tk.LEFT, padx=2)
         _add_tooltip(self.stop_btn, "Stop")
+
+        # --- Autoclicker ---
+        autoclicker_frame = ttk.LabelFrame(main, text=" Autoclicker (runs while monitoring) ", padding=8)
+        autoclicker_frame.pack(fill=tk.X, pady=(0, 10))
+        self.autoclicker_enabled_var = tk.BooleanVar(value=False)
+        row_ac = ttk.Frame(autoclicker_frame)
+        row_ac.pack(fill=tk.X, pady=3)
+        ttk.Checkbutton(row_ac, text="Enabled", variable=self.autoclicker_enabled_var).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(row_ac, text="Position:").pack(side=tk.LEFT, padx=(0, 4))
+        self.autoclick_pos_btn = _icon_btn(row_ac, BTN_AUTOCLICK, COLOR_ICON_AUTOCLICK, self._on_select_autoclick_position)
+        self.autoclick_pos_btn.pack(side=tk.LEFT, padx=2)
+        _add_tooltip(self.autoclick_pos_btn, "Select autoclick position")
+        self.autoclick_pos_label = ttk.Label(row_ac, text="not set", width=14, anchor=tk.W)
+        self.autoclick_pos_label.pack(side=tk.LEFT, padx=(4, 12))
+        ttk.Label(row_ac, text="Interval (sec):").pack(side=tk.LEFT, padx=(0, 4))
+        self.autoclick_interval_var = tk.StringVar(value="1")
+        ttk.Entry(row_ac, textvariable=self.autoclick_interval_var, width=6).pack(side=tk.LEFT)
+        ttk.Label(row_ac, text="(e.g. 1 or 0.5)").pack(side=tk.LEFT, padx=(4, 0))
 
         # --- On win: action ---
         actions = ttk.LabelFrame(main, text=" On win reached ", padding=8)
@@ -332,6 +354,15 @@ class App:
             self.click_on_delta = pt
             self.click_pos_label.config(text=f"Click: ({pt[0]}, {pt[1]})")
 
+    def _on_select_autoclick_position(self):
+        self.root.withdraw()
+        self.root.update()
+        pt = select_point()
+        self.root.deiconify()
+        if pt is not None:
+            self.autoclicker_coords = pt
+            self.autoclick_pos_label.config(text=f"({pt[0]}, {pt[1]})")
+
     def _on_start(self):
         if self.region is None:
             messagebox.showwarning("No region", "Select a region first.")
@@ -364,10 +395,25 @@ class App:
             messagebox.showwarning("Click action", "Click on win is enabled but no position set. Select click position or disable the option.")
             return
 
+        autoclicker_interval: float | None = None
+        if self.autoclicker_enabled_var.get():
+            if self.autoclicker_coords is None:
+                messagebox.showwarning("Autoclicker", "Autoclicker is enabled but no position set. Select autoclick position or disable.")
+                return
+            try:
+                autoclicker_interval = float(self.autoclick_interval_var.get().strip())
+            except ValueError:
+                messagebox.showerror("Invalid input", "Autoclicker interval must be a number (e.g. 1 or 0.5).")
+                return
+            if autoclicker_interval <= 0 or autoclicker_interval > 300:
+                messagebox.showerror("Invalid input", "Autoclicker interval must be between 0.01 and 300 seconds.")
+                return
+
         ntfy_topic = (self.ntfy_topic_var.get() or "").strip() or None
         ntfy_message = (self.ntfy_message_var.get() or "").strip() or "Win reached"
 
         self.stop_event.clear()
+        self._autoclicker_stop_event = Event()
         self.queue = Queue()
         start_tracker(
             self.region, interval, win, self.stop_event, self.queue,
@@ -375,13 +421,21 @@ class App:
             ntfy_topic=ntfy_topic,
             ntfy_message=ntfy_message,
             min_baseline=min_baseline,
+            autoclicker_stop_event=self._autoclicker_stop_event,
         )
+        if autoclicker_interval is not None and self.autoclicker_coords is not None:
+            start_autoclicker(
+                self.autoclicker_coords,
+                autoclicker_interval,
+                self._autoclicker_stop_event,
+            )
         self.status_var.set("Monitoring...")
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self.select_btn.config(state=tk.DISABLED)
         self.test_btn.config(state=tk.DISABLED)
         self.click_pos_btn.config(state=tk.DISABLED)
+        self.autoclick_pos_btn.config(state=tk.DISABLED)
         self._poll_queue()
 
     def _on_test_region(self):
@@ -408,6 +462,8 @@ class App:
     def _on_close(self):
         """Handle window close (X button): stop tracking and quit."""
         self.stop_event.set()
+        if self._autoclicker_stop_event is not None:
+            self._autoclicker_stop_event.set()
         if self._poll_id:
             try:
                 self.root.after_cancel(self._poll_id)
@@ -427,6 +483,8 @@ class App:
 
     def _on_stop(self):
         self.stop_event.set()
+        if self._autoclicker_stop_event is not None:
+            self._autoclicker_stop_event.set()
         self._set_stopped("Stopped by user")
 
     def _set_stopped(self, status: str):
@@ -436,6 +494,7 @@ class App:
         self.select_btn.config(state=tk.NORMAL)
         self.test_btn.config(state=tk.NORMAL)
         self.click_pos_btn.config(state=tk.NORMAL)
+        self.autoclick_pos_btn.config(state=tk.NORMAL)
         if self._poll_id:
             self.root.after_cancel(self._poll_id)
             self._poll_id = None

@@ -29,6 +29,38 @@ def _send_ntfy(topic: str, message: str) -> bool:
         return False
 
 
+def run_autoclicker(
+    coords: tuple[int, int],
+    interval: float,
+    stop_event: Event,
+) -> None:
+    """Click at coords every interval seconds until stop_event is set."""
+    import pyautogui
+    cx, cy = coords
+    while not stop_event.is_set():
+        if stop_event.wait(timeout=interval):
+            return
+        try:
+            pyautogui.click(cx, cy)
+        except Exception:
+            pass
+
+
+def start_autoclicker(
+    coords: tuple[int, int],
+    interval: float,
+    stop_event: Event,
+) -> Thread:
+    """Start autoclicker in daemon thread; returns the thread."""
+    t = Thread(
+        target=run_autoclicker,
+        args=(coords, interval, stop_event),
+        daemon=True,
+    )
+    t.start()
+    return t
+
+
 def run_tracker(
     region: tuple[int, int, int, int],
     interval: float,
@@ -39,12 +71,14 @@ def run_tracker(
     ntfy_topic: str | None = None,
     ntfy_message: str = "",
     min_baseline: float = 0,
+    autoclicker_stop_event: Event | None = None,
 ) -> None:
     """
     Run in a background thread. Every `interval` seconds, capture region,
     OCR number, push (timestamp_str, value) to out_queue. Trigger only when
     prev >= min_baseline and value *increases* by >= win (avoids false trigger
-    after OCR blips or tiny baseline). Then: optional click, ntfy, alert.
+    after OCR blips or tiny baseline). On win: stop autoclicker (if any),
+    then optional click, ntfy, alert.
     """
     left, top, width, height = region
     prev: float | None = None
@@ -63,6 +97,10 @@ def run_tracker(
                 and prev >= min_baseline
                 and (value - prev) >= win
             ):
+                # 1. Stop autoclicker immediately
+                if autoclicker_stop_event is not None:
+                    autoclicker_stop_event.set()
+                # 2. Click on win position (if configured)
                 clicked_at: tuple[int, int] | None = None
                 if click_on_win:
                     try:
@@ -72,10 +110,12 @@ def run_tracker(
                         clicked_at = (cx, cy)
                     except Exception:
                         clicked_at = None
+                # 3. ntfy notification
                 if ntfy_topic and ntfy_topic.strip():
                     msg = (ntfy_message or "Win reached").strip() or "Win reached"
                     body = f"{msg} Delta from {prev} to {value}"
                     _send_ntfy(ntfy_topic.strip(), body)
+                # 4. Alert to UI
                 out_queue.put(("alert", ts, prev, value, clicked_at))
                 return
             prev = value
@@ -98,11 +138,12 @@ def start_tracker(
     ntfy_topic: str | None = None,
     ntfy_message: str = "",
     min_baseline: float = 0,
+    autoclicker_stop_event: Event | None = None,
 ) -> Thread:
     """Start the tracker in a daemon thread; returns the thread."""
     t = Thread(
         target=run_tracker,
-        args=(region, interval, win, stop_event, out_queue, click_on_win, ntfy_topic, ntfy_message, min_baseline),
+        args=(region, interval, win, stop_event, out_queue, click_on_win, ntfy_topic, ntfy_message, min_baseline, autoclicker_stop_event),
         daemon=True,
     )
     t.start()
