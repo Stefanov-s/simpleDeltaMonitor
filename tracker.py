@@ -73,7 +73,8 @@ def run_tracker(
                     except Exception:
                         clicked_at = None
                 if ntfy_topic and ntfy_topic.strip():
-                    body = (ntfy_message or "Win reached").strip() or "Win reached"
+                    msg = (ntfy_message or "Win reached").strip() or "Win reached"
+                    body = f"{msg} Delta from {prev} to {value}"
                     _send_ntfy(ntfy_topic.strip(), body)
                 out_queue.put(("alert", ts, prev, value, clicked_at))
                 return

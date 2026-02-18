@@ -23,14 +23,29 @@ except ImportError:
 # Max lines to show in log
 LOG_MAX = 100
 
-# Professional, readable colors (no bright/yellow)
-COLOR_BG = "#eef1f5"
+# Button icons (Unicode; compact)
+BTN_SELECT_REGION = "⊞"
+BTN_TEST = "✓"
+BTN_START = "▶"
+BTN_STOP = "■"
+BTN_SELECT_CLICK = "•"
+
+# Icon colors (readable, distinct)
+COLOR_ICON_SELECT = "#1565c0"   # blue
+COLOR_ICON_TEST = "#7b1fa2"     # purple
+COLOR_ICON_START = "#2e7d32"    # green
+COLOR_ICON_STOP = "#c62828"     # red
+COLOR_ICON_CLICK = "#e65100"    # orange
+
+# UI colors (colorful but good contrast)
+COLOR_BG = "#e8ecf2"
 COLOR_CARD = "#ffffff"
 COLOR_TEXT = "#1a1d21"
-COLOR_ACCENT = "#4a6fa5"
-COLOR_LOG_BG = "#ffffff"
+COLOR_ACCENT = "#1565c0"
+COLOR_ACCENT_WARM = "#e65100"
+COLOR_LOG_BG = "#fafbfc"
 COLOR_LOG_FG = "#1a1d21"
-COLOR_LOG_SEL_BG = "#4a6fa5"
+COLOR_LOG_SEL_BG = "#1565c0"
 COLOR_LOG_SEL_FG = "#ffffff"
 
 
@@ -93,6 +108,24 @@ Categories=Utility;
         pass
 
 
+def _add_tooltip(widget: tk.Widget, text: str) -> None:
+    """Show text in a small popup when hovering over widget."""
+    tip = [None]
+    def on_enter(e):
+        tip[0] = tw = tk.Toplevel(widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{e.x_root+10}+{e.y_root+10}")
+        tw.attributes("-topmost", True)
+        lbl = tk.Label(tw, text=text, bg="#2d2d2d", fg="#eee", padx=6, pady=4, font=("", 9))
+        lbl.pack()
+    def on_leave(e):
+        if tip[0]:
+            tip[0].destroy()
+            tip[0] = None
+    widget.bind("<Enter>", on_enter)
+    widget.bind("<Leave>", on_leave)
+
+
 def _take_single_instance_lock() -> bool:
     """Try to take an exclusive lock so only one app instance runs. Returns True if we got it."""
     if fcntl is None:
@@ -129,8 +162,7 @@ class App:
             raise SystemExit(0)
         self.root = tk.Tk()
         self.root.title("DeltaMonitorBot (X11)")
-        self.root.minsize(440, 420)
-        self.root.geometry("460x500")
+        self.root.minsize(360, 420)
         self.root.resizable(True, True)
         self.root.configure(bg=COLOR_BG)
 
@@ -162,6 +194,10 @@ class App:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
+        self.root.update_idletasks()
+        w = max(360, self.root.winfo_reqwidth() + 20)
+        h = max(420, self.root.winfo_reqheight() + 20)
+        self.root.geometry(f"{w}x{h}")
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=14)
@@ -174,10 +210,10 @@ class App:
         row = ttk.Frame(settings)
         row.pack(fill=tk.X, pady=3)
         ttk.Label(row, text="Check interval (sec):", width=20, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 6))
-        self.interval_var = tk.StringVar(value="0.5")
+        self.interval_var = tk.StringVar(value="1")
         self.interval_entry = ttk.Entry(row, textvariable=self.interval_var, width=8)
         self.interval_entry.pack(side=tk.LEFT)
-        ttk.Label(row, text="(e.g. 0.5)").pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(row, text="(e.g. 1)").pack(side=tk.LEFT, padx=(6, 0))
 
         row2 = ttk.Frame(settings)
         row2.pack(fill=tk.X, pady=3)
@@ -198,14 +234,24 @@ class App:
         row3.pack(fill=tk.X, pady=6)
         self.region_label = ttk.Label(row3, text="Region: not set", width=20, anchor=tk.W)
         self.region_label.pack(side=tk.LEFT, padx=(0, 8))
-        self.select_btn = ttk.Button(row3, text="Select region", command=self._on_select_region)
+        def _icon_btn(parent, icon: str, color: str, cmd, state: str = "normal") -> tk.Button:
+            b = tk.Button(parent, text=icon, font=("", 14), fg=color, bg=COLOR_CARD,
+                         activeforeground=color, activebackground="#e8eaed",
+                         relief=tk.FLAT, borderwidth=1, cursor="hand2",
+                         command=cmd, state=state, width=3)
+            return b
+        self.select_btn = _icon_btn(row3, BTN_SELECT_REGION, COLOR_ICON_SELECT, self._on_select_region)
         self.select_btn.pack(side=tk.LEFT, padx=2)
-        self.test_btn = ttk.Button(row3, text="Test region", command=self._on_test_region, state=tk.DISABLED)
+        _add_tooltip(self.select_btn, "Select region")
+        self.test_btn = _icon_btn(row3, BTN_TEST, COLOR_ICON_TEST, self._on_test_region, "disabled")
         self.test_btn.pack(side=tk.LEFT, padx=2)
-        self.start_btn = ttk.Button(row3, text="Start", command=self._on_start, state=tk.DISABLED)
+        _add_tooltip(self.test_btn, "Test region")
+        self.start_btn = _icon_btn(row3, BTN_START, COLOR_ICON_START, self._on_start, "disabled")
         self.start_btn.pack(side=tk.LEFT, padx=2)
-        self.stop_btn = ttk.Button(row3, text="Stop", command=self._on_stop, state=tk.DISABLED)
+        _add_tooltip(self.start_btn, "Start")
+        self.stop_btn = _icon_btn(row3, BTN_STOP, COLOR_ICON_STOP, self._on_stop, "disabled")
         self.stop_btn.pack(side=tk.LEFT, padx=2)
+        _add_tooltip(self.stop_btn, "Stop")
 
         # --- On win: action ---
         actions = ttk.LabelFrame(main, text=" On win reached ", padding=8)
@@ -219,8 +265,9 @@ class App:
             text="Click at position (then show alert)",
             variable=self.click_action_var,
         ).pack(side=tk.LEFT, padx=(0, 8))
-        self.click_pos_btn = ttk.Button(row_act, text="Select click position", command=self._on_select_click_position)
+        self.click_pos_btn = _icon_btn(row_act, BTN_SELECT_CLICK, COLOR_ICON_CLICK, self._on_select_click_position)
         self.click_pos_btn.pack(side=tk.LEFT, padx=2)
+        _add_tooltip(self.click_pos_btn, "Select click position")
         self.click_pos_label = ttk.Label(row_act, text="Click: not set", width=18, anchor=tk.W)
         self.click_pos_label.pack(side=tk.LEFT, padx=(8, 0))
 
@@ -422,7 +469,7 @@ class App:
                     return
         except Empty:
             pass
-        if self.stop_btn.state() != (tk.DISABLED,):
+        if self.stop_btn["state"] != "disabled":
             self._poll_id = self.root.after(100, self._poll_queue)
 
     def run(self):
