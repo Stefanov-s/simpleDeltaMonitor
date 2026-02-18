@@ -93,34 +93,34 @@ def run_tracker(
         if value is not None:
             out_queue.put(("reading", ts, value))
             # Trigger only when baseline OK, delta in [win, max_delta]
-            delta = value - prev
-            if (
-                prev is not None
-                and prev >= min_baseline
-                and delta >= win
-                and (max_delta is None or delta <= max_delta)
-            ):
-                # 1. Stop autoclicker immediately
-                if autoclicker_stop_event is not None:
-                    autoclicker_stop_event.set()
-                # 2. Click on win position (if configured)
-                clicked_at: tuple[int, int] | None = None
-                if click_on_win:
-                    try:
-                        import pyautogui
-                        cx, cy = click_on_win
-                        pyautogui.click(cx, cy)
-                        clicked_at = (cx, cy)
-                    except Exception:
-                        clicked_at = None
-                # 3. ntfy notification
-                if ntfy_topic and ntfy_topic.strip():
-                    msg = (ntfy_message or "Win reached").strip() or "Win reached"
-                    body = f"{msg} Delta from {prev} to {value}"
-                    _send_ntfy(ntfy_topic.strip(), body)
-                # 4. Alert to UI
-                out_queue.put(("alert", ts, prev, value, clicked_at))
-                return
+            if prev is not None:
+                delta = value - prev
+                if (
+                    prev >= min_baseline
+                    and delta >= win
+                    and (max_delta is None or delta <= max_delta)
+                ):
+                    # 1. Stop autoclicker immediately
+                    if autoclicker_stop_event is not None:
+                        autoclicker_stop_event.set()
+                    # 2. Click on win position (if configured)
+                    clicked_at: tuple[int, int] | None = None
+                    if click_on_win:
+                        try:
+                            import pyautogui
+                            cx, cy = click_on_win
+                            pyautogui.click(cx, cy)
+                            clicked_at = (cx, cy)
+                        except Exception:
+                            clicked_at = None
+                    # 3. ntfy notification
+                    if ntfy_topic and ntfy_topic.strip():
+                        msg = (ntfy_message or "Win reached").strip() or "Win reached"
+                        body = f"{msg} Delta from {prev} to {value}"
+                        _send_ntfy(ntfy_topic.strip(), body)
+                    # 4. Alert to UI
+                    out_queue.put(("alert", ts, prev, value, clicked_at))
+                    return
             prev = value
         else:
             out_queue.put(("reading", ts, None))  # log failed read
