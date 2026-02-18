@@ -38,11 +38,13 @@ def run_tracker(
     click_on_win: tuple[int, int] | None = None,
     ntfy_topic: str | None = None,
     ntfy_message: str = "",
+    min_baseline: float = 0,
 ) -> None:
     """
     Run in a background thread. Every `interval` seconds, capture region,
     OCR number, push (timestamp_str, value) to out_queue. Trigger only when
-    value *increases* by >= win. Then: optional click, optional ntfy POST, then alert.
+    prev >= min_baseline and value *increases* by >= win (avoids false trigger
+    after OCR blips or tiny baseline). Then: optional click, ntfy, alert.
     """
     left, top, width, height = region
     prev: float | None = None
@@ -55,8 +57,12 @@ def run_tracker(
 
         if value is not None:
             out_queue.put(("reading", ts, value))
-            # Trigger only on increase by >= win (not on decrease)
-            if prev is not None and (value - prev) >= win:
+            # Trigger only when baseline is high enough and increase >= win
+            if (
+                prev is not None
+                and prev >= min_baseline
+                and (value - prev) >= win
+            ):
                 clicked_at: tuple[int, int] | None = None
                 if click_on_win:
                     try:
@@ -90,11 +96,12 @@ def start_tracker(
     click_on_win: tuple[int, int] | None = None,
     ntfy_topic: str | None = None,
     ntfy_message: str = "",
+    min_baseline: float = 0,
 ) -> Thread:
     """Start the tracker in a daemon thread; returns the thread."""
     t = Thread(
         target=run_tracker,
-        args=(region, interval, win, stop_event, out_queue, click_on_win, ntfy_topic, ntfy_message),
+        args=(region, interval, win, stop_event, out_queue, click_on_win, ntfy_topic, ntfy_message, min_baseline),
         daemon=True,
     )
     t.start()

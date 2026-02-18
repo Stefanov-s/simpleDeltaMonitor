@@ -186,6 +186,14 @@ class App:
         self.win_entry = ttk.Entry(row2, textvariable=self.win_var, width=8)
         self.win_entry.pack(side=tk.LEFT)
 
+        row2b = ttk.Frame(settings)
+        row2b.pack(fill=tk.X, pady=3)
+        ttk.Label(row2b, text="Min baseline (first number must be ≥):", width=28, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 6))
+        self.min_baseline_var = tk.StringVar(value="10")
+        self.min_baseline_entry = ttk.Entry(row2b, textvariable=self.min_baseline_var, width=8)
+        self.min_baseline_entry.pack(side=tk.LEFT)
+        ttk.Label(row2b, text="(avoids false trigger after blips)").pack(side=tk.LEFT, padx=(6, 0))
+
         row3 = ttk.Frame(settings)
         row3.pack(fill=tk.X, pady=6)
         self.region_label = ttk.Label(row3, text="Region: not set", width=20, anchor=tk.W)
@@ -293,6 +301,14 @@ class App:
         if win < 0:
             messagebox.showerror("Invalid input", "Win must be >= 0.")
             return
+        try:
+            min_baseline = float(self.min_baseline_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Invalid input", "Min baseline must be a number.")
+            return
+        if min_baseline < 0:
+            messagebox.showerror("Invalid input", "Min baseline must be >= 0.")
+            return
 
         click_on_win: tuple[int, int] | None = None
         if self.click_action_var.get() and self.click_on_delta is not None:
@@ -311,6 +327,7 @@ class App:
             click_on_win=click_on_win,
             ntfy_topic=ntfy_topic,
             ntfy_message=ntfy_message,
+            min_baseline=min_baseline,
         )
         self.status_var.set("Monitoring...")
         self.start_btn.config(state=tk.DISABLED)
