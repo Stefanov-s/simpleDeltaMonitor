@@ -71,6 +71,7 @@ def run_tracker(
     ntfy_topic: str | None = None,
     ntfy_message: str = "",
     min_baseline: float = 0,
+    max_delta: float | None = None,
     autoclicker_stop_event: Event | None = None,
 ) -> None:
     """
@@ -91,11 +92,13 @@ def run_tracker(
 
         if value is not None:
             out_queue.put(("reading", ts, value))
-            # Trigger only when baseline is high enough and increase >= win
+            # Trigger only when baseline OK, delta in [win, max_delta]
+            delta = value - prev
             if (
                 prev is not None
                 and prev >= min_baseline
-                and (value - prev) >= win
+                and delta >= win
+                and (max_delta is None or delta <= max_delta)
             ):
                 # 1. Stop autoclicker immediately
                 if autoclicker_stop_event is not None:
@@ -138,12 +141,13 @@ def start_tracker(
     ntfy_topic: str | None = None,
     ntfy_message: str = "",
     min_baseline: float = 0,
+    max_delta: float | None = None,
     autoclicker_stop_event: Event | None = None,
 ) -> Thread:
     """Start the tracker in a daemon thread; returns the thread."""
     t = Thread(
         target=run_tracker,
-        args=(region, interval, win, stop_event, out_queue, click_on_win, ntfy_topic, ntfy_message, min_baseline, autoclicker_stop_event),
+        args=(region, interval, win, stop_event, out_queue, click_on_win, ntfy_topic, ntfy_message, min_baseline, max_delta, autoclicker_stop_event),
         daemon=True,
     )
     t.start()

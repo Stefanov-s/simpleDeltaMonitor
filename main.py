@@ -228,11 +228,19 @@ class App:
 
         row2b = ttk.Frame(settings)
         row2b.pack(fill=tk.X, pady=3)
-        ttk.Label(row2b, text="Min baseline (first number must be ≥):", width=28, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(row2b, text="Min baseline (prev must be ≥):", width=24, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 6))
         self.min_baseline_var = tk.StringVar(value="10")
         self.min_baseline_entry = ttk.Entry(row2b, textvariable=self.min_baseline_var, width=8)
         self.min_baseline_entry.pack(side=tk.LEFT)
         ttk.Label(row2b, text="(avoids false trigger after blips)").pack(side=tk.LEFT, padx=(6, 0))
+
+        row2c = ttk.Frame(settings)
+        row2c.pack(fill=tk.X, pady=3)
+        ttk.Label(row2c, text="Max delta (increase must be ≤):", width=28, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 6))
+        self.max_delta_var = tk.StringVar(value="")
+        self.max_delta_entry = ttk.Entry(row2c, textvariable=self.max_delta_var, width=8)
+        self.max_delta_entry.pack(side=tk.LEFT)
+        ttk.Label(row2c, text="(empty = no limit, ignores OCR spikes)").pack(side=tk.LEFT, padx=(6, 0))
 
         row3 = ttk.Frame(settings)
         row3.pack(fill=tk.X, pady=6)
@@ -388,6 +396,21 @@ class App:
             messagebox.showerror("Invalid input", "Min baseline must be >= 0.")
             return
 
+        max_delta: float | None = None
+        max_str = (self.max_delta_var.get() or "").strip()
+        if max_str:
+            try:
+                max_delta = float(max_str)
+            except ValueError:
+                messagebox.showerror("Invalid input", "Max delta must be a number or left empty.")
+                return
+            if max_delta < 0:
+                messagebox.showerror("Invalid input", "Max delta must be >= 0.")
+                return
+            if max_delta < win:
+                messagebox.showerror("Invalid input", "Max delta must be >= win.")
+                return
+
         click_on_win: tuple[int, int] | None = None
         if self.click_action_var.get() and self.click_on_delta is not None:
             click_on_win = self.click_on_delta
@@ -421,6 +444,7 @@ class App:
             ntfy_topic=ntfy_topic,
             ntfy_message=ntfy_message,
             min_baseline=min_baseline,
+            max_delta=max_delta,
             autoclicker_stop_event=self._autoclicker_stop_event,
         )
         if autoclicker_interval is not None and self.autoclicker_coords is not None:
