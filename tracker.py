@@ -5,6 +5,7 @@ Triggers only when value *increases* by >= win. Optional click, ntfy, then alert
 from __future__ import annotations
 
 import time
+from collections import deque
 from queue import Queue
 from threading import Event, Thread
 from typing import Any
@@ -77,12 +78,12 @@ def run_tracker(
     """
     Run in a background thread. Every `interval` seconds, capture region,
     OCR number, push (timestamp_str, value) to out_queue. Trigger only when
-    prev >= min_baseline and value *increases* by >= win (avoids false trigger
-    after OCR blips or tiny baseline). On win: stop autoclicker (if any),
-    then optional click, ntfy, alert.
+    prev >= min_baseline, value increases by >= win from prev, AND value is
+    greater than the last 3 readings (filters "262 read as 26" one-frame blips).
+    On win: stop autoclicker (if any), then optional click, ntfy, alert.
     """
     left, top, width, height = region
-    prev: float | None = None
+    history: deque[float] = deque(maxlen=3)
 
     while not stop_event.is_set():
         t0 = time.monotonic()
@@ -92,13 +93,17 @@ def run_tracker(
 
         if value is not None:
             out_queue.put(("reading", ts, value))
-            # Trigger only when baseline OK, delta in [win, max_delta]
-            if prev is not None:
+            # Need at least 3 previous readings to check against all
+            if len(history) >= 3:
+                prev = history[-1]
                 delta = value - prev
+                # Must be increase from prev, within [win, max_delta], and > all 3 (no recovery blip)
                 if (
                     prev >= min_baseline
                     and delta >= win
                     and (max_delta is None or delta <= max_delta)
+                    and value > history[-2]
+                    and value > history[-3]
                 ):
                     # 1. Stop autoclicker immediately
                     if autoclicker_stop_event is not None:
@@ -121,7 +126,7 @@ def run_tracker(
                     # 4. Alert to UI
                     out_queue.put(("alert", ts, prev, value, clicked_at))
                     return
-            prev = value
+            history.append(value)
         else:
             out_queue.put(("reading", ts, None))  # log failed read
 
